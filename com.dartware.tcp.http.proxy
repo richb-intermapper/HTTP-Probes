@@ -1,0 +1,169 @@
+<!-- 
+	HTTP (Proxy) (com.dartware.tcp.http.proxy)
+    Copyright © 2000-2013 Help/Systems LLC. All rights reserved.
+-->
+
+<header>
+	type			= 	"tcp-script"
+	package			= 	"com.dartware"
+	probe_name		=	"tcp.http.proxy"
+	human_name		=	"HTTP (Proxy)"
+	version			= 	"2.8"
+	address_type	= 	"IP"
+	port_number		=	"80"
+	display_name	=	"Servers-Standard/HTTP & HTTPS/HTTP (Proxy)"
+	<!-- url_hint		=	"${URL}" This URL hint is currently not supported -->
+</header>
+
+<description>
+
+\GB\Hypertext Transfer Protocol (HTTP) - Proxy\P\
+
+The protocol used to transfer web pages on the World Wide Web, defined in \U2=http://www.ietf.org/rfc/rfc2068.txt\RFC 2068\P0\ and \U2=http://www.ietf.org/rfc/rfc1945.txt\RFC 1945\P0\. The default TCP port number for HTTP connections is port 80.
+
+This TCP probe lets you test that a web server can be accessed using a remote proxy server as an intermediary. For example, this probe can check if your web server is accessible from some remote location on the Internet.
+
+\i\URL\p\ is the full URL to the desired page on the web server,including the "http://" scheme (e.g. "http://www.intermapper.com")
+
+\i\Proxy User ID\p\ is your user ID for the proxy server. Leave this field blank if no authentication is required to use the proxy server.
+
+\i\Proxy Password\p\ is your password for the proxy server. Leave this field blank if no authentication is required to use the proxy server.
+
+\i\String to verify\p\ is a string to verify in the data returned by the HTTP server.  For example, if you are retrieving a web page, you might search for "<HTML" or "<P>" to verify that the data is HTML. If this string is not found, the device will go into alarm.
+
+\i\User Agent\p\ is the string that identifies this InterMapper client probe to the proxy web server. Some proxy servers block traffic at the proxy based on the User-Agent identity. This parameter lets you optionally override InterMapper's default User-Agent setting. If you leave this parameter blank, InterMapper sends a User-Agent  string of "InterMapper/version", where version is the current version number of InterMapper.
+</description>
+
+<parameters>
+
+"URL"					=	"http://proxy.intermapper.com"
+"Proxy User ID"			=	""
+"Proxy Password*"		=	""
+"String to verify"		=	"<HTML"
+"User Agent"			= 	""
+
+</parameters>
+
+<script>
+
+CONN #60 (connect timeout in secs)
+WAIT #30 @IDLE (idle timeout in secs)
+DISC @DISCONNECT (disconnect handler)
+
+-- $host is the host name the customer specified in the probe, or the IP Address if none
+STOR "host" "${_REMOTEADDRESS}"
+CHCK "${Host Name}" else goto #+2
+STOR "host" "${Host Name}"
+
+-- $path is the path of the URL. Add a "/" to the front if the customer didn't supply one
+EVAL $firstchar := substr( "${URL Path}", 0, 1 )
+EVAL $pathsep := ("$firstchar" == "/" ? "" : "/")
+STOR "path" "${pathsep}${URL Path}"
+
+-- $fullURL contains the complete URL to the site
+STOR "fullURL" "http://${host}:${_REMOTEPORT}${path}"
+
+-- Prepare the HTTP request and send it
+SEND "GET ${path} HTTP/1.0\r\n"
+CHCK "${Host Name}" else goto #+2
+SEND "Host: ${Host Name}\r\n"
+SEND "User-Agent: InterMapper/${_VERSION}\r\n"
+CHCK "${Proxy User ID}${Proxy Password*}" else goto #+2
+SEND "Proxy-Authorization: Basic ${_BASE64:${Proxy User ID}:${Proxy Password*}}\r\n"
+SEND "Cache-Control: no-cache\r\n"
+SEND "Pragma: no-cache\r\n"
+SEND "\r\n"
+
+-- Wait for and process the response
+MTCH "^HTTP/"ri else goto @UNEXPECTED_GREETING
+MTCH "^HTTP/... 200"ri else goto @BAD_GET_RESPONSE
+EXPT "^$"r
+LINE OFF
+DISC if disconnected goto @NO_MATCH   
+EXPT "${String to verify}"i else goto @NO_MATCH
+DONE OKAY
+
+@IDLE
+DONE DOWN "[HTTP (PROXY)] No data for ${_IDLETIMEOUT} seconds.  Was expecting \"${_STRINGTOMATCH}\". [Line ${_IDLELINE}]"
+
+@UNEXPECTED_GREETING
+DONE DOWN "[HTTP (PROXY)] Unexpected greeting from port ${_REMOTEPORT}. (${_LINE:50})"
+
+@NO_MATCH
+DONE WARN "[HTTP (PROXY)] \"${String to verify}\" not found in returned HTTP data."
+
+@UNAVAIL_GET_RESPONSE
+MTCH m"50[0-9]" else goto @BAD_GET_RESPONSE
+DONE DOWN "[HTTP (PROXY)] ${_LINE:50} (${URL})"
+
+@BAD_GET_RESPONSE
+MTCH "^HTTP/... 201"ri ELSE #+2
+DONE WARN "[HTTP] 201 Created (${fullURL})"
+MTCH "^HTTP/... 202"ri ELSE #+2
+DONE WARN "[HTTP] 202 Accepted (${fullURL})"
+MTCH "^HTTP/... 204"ri ELSE #+2
+DONE WARN "[HTTP] 204 No Content (${fullURL})"
+MTCH "^HTTP/... 301"ri ELSE #+2
+GOTO @RED301
+MTCH "^HTTP/... 302"ri ELSE #+2
+GOTO @RED302
+MTCH "^HTTP/... 303"ri ELSE #+2
+GOTO @RED303
+MTCH "^HTTP/... 304"ri ELSE #+2
+DONE WARN "[HTTP] 304 Not Modified (${fullURL})"
+MTCH "^HTTP/... 307"ri ELSE #+2
+GOTO @RED307
+MTCH "^HTTP/... 400"ri ELSE #+2
+DONE WARN "[HTTP] 400 Bad Request (${fullURL})"
+MTCH "^HTTP/... 401"ri ELSE #+2
+DONE WARN "[HTTP] 401 Unauthorized (${fullURL})"
+MTCH "^HTTP/... 403"ri ELSE #+2
+DONE WARN "[HTTP] 403 Forbidden (${fullURL})"
+MTCH "^HTTP/... 404"ri ELSE #+2
+DONE WARN "[HTTP] 404 Not Found (${fullURL})"
+MTCH "^HTTP/... 500"ri ELSE #+2
+DONE ALRM "[HTTP] 500 Internal Server Error (${fullURL})"
+MTCH "^HTTP/... 501"ri ELSE #+2
+DONE ALRM "[HTTP] 501 Not Implemented (${fullURL})"
+MTCH "^HTTP/... 502"ri ELSE #+2
+DONE ALRM "[HTTP] 502 Bad Gateway (${fullURL})"
+MTCH "^HTTP/... 503"ri ELSE #+2
+DONE ALRM "[HTTP] 503 Service Unavailable (${fullURL})"
+DONE ALRM "[HTTP] Unknown Error Code '${_LINE:32}' (${fullURL})"
+
+@RED301
+STOR "status" "301 Moved Permanently to"
+GOTO @REDIRECT
+@RED302
+STOR "status" "302 Moved Temporarily to"
+GOTO @REDIRECT
+@RED303
+STOR "status" "303 See other page at"
+GOTO @REDIRECT
+@RED307
+STOR "status" "307 Moved Temporarily to"
+
+@REDIRECT
+DISC @DISCREDIR (disconnect handler for redirected pages)
+NEXT						-- loop through lines until we get to the "Location"
+MTCH "Location"i ELSE #-1
+DONE ALRM "[HTTP] $status ${_LINE:100}"
+
+@DISCREDIR -- got a disconnect while waiting for "Location"
+DONE ALRM "[HTTP] Disconnected waiting for redirect URL (last line was ${_LINE:100})"
+
+@DISCONNECT
+DONE DOWN "[HTTP (PROXY)] Disconnected from port ${_REMOTEPORT} after ${_SECSCONNECTED} seconds."
+
+</script>
+
+<script-output>
+\B5\HTTP Information for \0P\ \u4=${eval:"${fullURL}"}\${eval:"${fullURL}"}\p0\
+  \4\Time to establish connection:\0\ ${_connect} msecs
+  \4\Time spent connected to host:\0\ ${_active} msecs
+</script-output>
+
+<datasets>
+  $_connect,	'conntime',   "msec",   "true",   "Time to establish connection"
+  $_active,   'connactive', "msec",   "true",   "Time spent connected to host"
+</datasets>

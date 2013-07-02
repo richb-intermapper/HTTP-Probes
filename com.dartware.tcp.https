@@ -1,0 +1,164 @@
+<!-- 
+	HTTP (com.dartware.tcp.https)
+    Copyright © 2000-2013 Help/Systems LLC. All rights reserved.
+-->
+
+<header>
+	type			= 	"tcp-script"
+	package			= 	"com.dartware"
+	probe_name		=	"tcp.https"
+	human_name		=	"HTTPS"
+	version			= 	"2.8"
+	address_type	= 	"IP"
+	port_number		=	"443"
+	display_name	=	"Servers-Standard/HTTP & HTTPS/HTTPS"
+	url_hint		=	"https://${ADDRESS}:${PORT}/"
+</header>
+
+<description>
+
+\GB\Hypertext Transfer Protocol over SSL/TLS (HTTPS)\P\
+
+The protocol used for secure transfer of web pages on the World Wide Web. The default TCP port number for HTTP connections is port 443.
+
+This probe lets you establish a secure connection to a web server, download a specific web page, and scan it for a specific string of HTML.
+
+\i\Host Name\p\ is the domain name of the web server (e.g. "www.intermapper.com"). This can be derived from the host name part of the URL that you want to test. You must enter a valid "Host Name" to test web servers which implement virtual hosts.
+
+\i\URL Path\p\ is the full path of the desired file on the web server (e.g. "/index.html"). This can be empty to get to the root page of the site.
+
+\i\String to verify\p\ is a string to verify in the data returned by the HTTP server.  For example, if you are retrieving a web page, you might search for "<HTML" or "<P>" to verify that the data is HTML. If this string is not found, the device will go into alarm.
+
+\i\User ID\p\ is the user name typed into the web browser's password dialog. The default is to leave this blank. You should set this parameter if you want to test a web page that requires authentication.
+
+\i\Password\p\ is the password for the web browser's dialog. The default is to leave this blank. You should set this parameter if you want to test a web page that requires authentication.
+
+</description>
+
+<parameters>
+
+"Host Name"			=		""
+"URL Path"			=		"/"
+"String to verify"	=		"<HTML"
+"User ID"			=		""
+"Password*"			=		""
+
+</parameters>
+
+<script>
+
+CONN #60 "SECURE"
+WAIT #30 @IDLE (idle timeout in secs)
+DISC @DISCONNECT (disconnect handler)
+
+-- $host is the host name the customer specified in the probe, or the IP Address if none
+STOR "host" "${_REMOTEADDRESS}"
+CHCK "${Host Name}" else goto #+2
+STOR "host" "${Host Name}"
+
+-- $path is the path of the URL. Add a "/" to the front if the customer didn't supply one
+EVAL $firstchar := substr( "${URL Path}", 0, 1 )
+EVAL $pathsep := ("$firstchar" == "/" ? "" : "/")
+STOR "path" "${pathsep}${URL Path}"
+
+-- $fullURL contains the complete URL to the site
+STOR "fullURL" "https://${host}:${_REMOTEPORT}${path}"
+
+-- Prepare the HTTP request and send it
+SEND "GET ${path} HTTP/1.0\r\n"
+CHCK "${Host Name}" else goto #+2
+SEND "Host: ${Host Name}\r\n"
+SEND "User-Agent: InterMapper/${_VERSION}\r\n"
+CHCK "${User ID}${Password*}" else goto #+2
+SEND "Authorization: Basic ${_BASE64:${User ID}:${Password*}}\r\n"
+SEND "\r\n"
+
+-- Wait for and process the response
+MTCH "^HTTP/"ri else goto @UNEXPECTED_GREETING
+MTCH "^HTTP/... 200"ri else goto @BAD_GET_RESPONSE
+EXPT "^$"r
+LINE OFF
+DISC if disconnected goto @NO_MATCH   
+EXPT "${String to verify}"i else goto @NO_MATCH
+DONE OKAY
+
+@IDLE
+DONE DOWN "[HTTPS] No data for ${_IDLETIMEOUT} seconds.  Was expecting \"${_STRINGTOMATCH}\". (${fullURL})"
+
+@UNEXPECTED_GREETING
+DONE DOWN "[HTTPS] Unexpected greeting from port ${_REMOTEPORT}. (${fullURL})"
+
+@NO_MATCH
+DONE WARN "[HTTPS] \"${String to verify}\" not found in ${fullURL}"
+
+@BAD_GET_RESPONSE
+MTCH "^HTTP/... 201"ri ELSE #+2
+DONE WARN "[HTTPS] 201 Created (${fullURL})"
+MTCH "^HTTP/... 202"ri ELSE #+2
+DONE WARN "[HTTPS] 202 Accepted (${fullURL})"
+MTCH "^HTTP/... 204"ri ELSE #+2
+DONE WARN "[HTTPS] 204 No Content (${fullURL})"
+MTCH "^HTTP/... 301"ri ELSE #+2
+GOTO @RED301
+MTCH "^HTTP/... 302"ri ELSE #+2
+GOTO @RED302
+MTCH "^HTTP/... 303"ri ELSE #+2
+GOTO @RED303
+MTCH "^HTTP/... 304"ri ELSE #+2
+DONE WARN "[HTTPS] 304 Not Modified (${fullURL})"
+MTCH "^HTTP/... 307"ri ELSE #+2
+GOTO @RED307
+MTCH "^HTTP/... 400"ri ELSE #+2
+DONE WARN "[HTTPS] 400 Bad Request (${fullURL})"
+MTCH "^HTTP/... 401"ri ELSE #+2
+DONE WARN "[HTTPS] 401 Unauthorized (${fullURL})"
+MTCH "^HTTP/... 403"ri ELSE #+2
+DONE WARN "[HTTPS] 403 Forbidden (${fullURL})"
+MTCH "^HTTP/... 404"ri ELSE #+2
+DONE WARN "[HTTPS] 404 Not Found (${fullURL})"
+MTCH "^HTTP/... 500"ri ELSE #+2
+DONE ALRM "[HTTPS] 500 Internal Server Error (${fullURL})"
+MTCH "^HTTP/... 501"ri ELSE #+2
+DONE ALRM "[HTTPS] 501 Not Implemented (${fullURL})"
+MTCH "^HTTP/... 502"ri ELSE #+2
+DONE ALRM "[HTTPS] 502 Bad Gateway (${fullURL})"
+MTCH "^HTTP/... 503"ri ELSE #+2
+DONE ALRM "[HTTPS] 503 Service Unavailable (${fullURL})"
+DONE ALRM "[HTTPS] Unknown Error Code '${_LINE:32}' (${fullURL})"
+
+@RED301
+STOR "status" "301 Moved Permanently to"
+GOTO @REDIRECT
+@RED302
+STOR "status" "302 Moved Temporarily to"
+GOTO @REDIRECT
+@RED303
+STOR "status" "303 See other page at"
+GOTO @REDIRECT
+@RED307
+STOR "status" "307 Moved Temporarily to"
+
+@REDIRECT
+DISC @DISCREDIR (disconnect handler for redirected pages)
+NEXT						-- loop through lines until we get to the "Location"
+MTCH "Location"i ELSE #-1
+DONE ALRM "[HTTPS] $status ${_LINE:100}"
+
+@DISCREDIR -- got a disconnect while waiting for "Location"
+DONE ALRM "[HTTPS] Disconnected waiting for redirect URL (last line was ${_LINE:100})"
+
+@DISCONNECT
+DONE DOWN "[HTTPS] Disconnected from port ${_REMOTEPORT} after ${_SECSCONNECTED} seconds. (${fullURL})"
+
+</script>
+
+<script-output>
+\B5\HTTP Information for \0P\ \u4=${eval:"${fullURL}"}\${eval:"${fullURL}"}\p0\
+  \4\Time to establish connection:\0\ ${_connect} msecs
+  \4\Time spent connected to host:\0\ ${_active} msecs
+</script-output>
+
+<datasets>
+  $_connect,	'conntime',   "msec",   "true",   "Time to establish connection"
+  $_active,   'connactive', "msec",   "true",   "Time spent connected to host"
+</datasets>
